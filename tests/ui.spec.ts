@@ -142,7 +142,7 @@ test("松开截图选区立即提交，不出现额外按钮", async ({ page }) 
 });
 
 test("贴图悬停显示工具栏；直接编辑、保存、另存和关闭", async ({ page }) => {
-  await page.setViewportSize({ width: 320, height: 240 });
+  await page.setViewportSize({ width: 360, height: 260 });
   await page.addInitScript((data) => {
     type Item = { text: string; handler: { id: number } };
     const callbacks: ((message: unknown) => void)[] = [];
@@ -206,6 +206,9 @@ test("贴图悬停显示工具栏；直接编辑、保存、另存和关闭", as
     });
   }, pinFixture);
   await page.goto("http://127.0.0.1:5173/?view=pin&id=sample");
+  // Leave room to move the pointer off the pin regardless of the initial cursor position.
+  await page.addStyleTag({ content: ".pin-body #app { width: 320px; height: 240px; }" });
+  await page.mouse.move(350, 250);
   const image = page.getByRole("img", { name: "桌面置顶截图" });
   await expect(image).toBeVisible();
   expect(await image.boundingBox()).toEqual({
