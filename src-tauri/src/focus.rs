@@ -8,39 +8,63 @@ pub fn current() -> i64 {
         .unwrap_or(0)
 }
 #[cfg(target_os = "macos")]
+pub fn can_paste() -> bool {
+    #[link(name = "CoreGraphics", kind = "framework")]
+    unsafe extern "C" {
+        fn CGPreflightPostEventAccess() -> bool;
+    }
+    unsafe { CGPreflightPostEventAccess() }
+}
+#[cfg(target_os = "macos")]
+pub fn restore(target: i64, marker: objc2_foundation::MainThreadMarker) -> Result<(), String> {
+    use objc2::runtime::NSObjectProtocol;
+    use objc2_app_kit::{NSApplication, NSApplicationActivationOptions, NSRunningApplication};
+    if current() == target && target > 0 {
+        return Ok(());
+    }
+    let target_app = NSRunningApplication::runningApplicationWithProcessIdentifier(target as i32)
+        .ok_or("已复制，原窗口已关闭")?;
+    let app = NSApplication::sharedApplication(marker);
+    if app.isActive() {
+        if app.respondsToSelector(objc2::sel!(yieldActivationToApplication:)) {
+            app.yieldActivationToApplication(&target_app);
+            if target_app.activateFromApplication_options(
+                &NSRunningApplication::currentApplication(),
+                NSApplicationActivationOptions::empty(),
+            ) {
+                return Ok(());
+            }
+        }
+    } else if current() != 0 {
+        return Err("已复制；前台应用已切换，请在目标窗口按 ⌘V".into());
+    }
+    #[allow(deprecated)]
+    target_app.activateWithOptions(NSApplicationActivationOptions::ActivateIgnoringOtherApps);
+    Ok(())
+}
+#[cfg(target_os = "macos")]
+pub fn wait_until_active(target: i64) -> Result<(), String> {
+    if target > 0 {
+        for _ in 0..50 {
+            if current() == target {
+                return Ok(());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+    Err("已复制；请切换回原窗口后按 ⌘V".into())
+}
+#[cfg(target_os = "macos")]
 pub fn paste(target: i64) -> Result<(), String> {
     use core_graphics::{
         event::{CGEvent, CGEventFlags},
         event_source::{CGEventSource, CGEventSourceStateID},
     };
-    #[link(name = "ApplicationServices", kind = "framework")]
-    unsafe extern "C" {
-        fn AXIsProcessTrusted() -> bool;
-    }
-    if target <= 0 {
-        return Err("已复制；请切换到目标窗口，按 ⌘V 粘贴".into());
-    }
-    if !unsafe { AXIsProcessTrusted() } {
-        return Err("已复制。允许辅助功能权限后可自动粘贴；现在可按 ⌘V 粘贴".into());
-    }
-    let app =
-        objc2_app_kit::NSRunningApplication::runningApplicationWithProcessIdentifier(target as i32)
-            .ok_or("已复制，原窗口已关闭")?;
-    #[allow(deprecated)]
-    app.activateWithOptions(
-        objc2_app_kit::NSApplicationActivationOptions::ActivateIgnoringOtherApps,
-    );
-    for _ in 0..30 {
-        if current() == target {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
-    if current() != target {
+    if target <= 0 || current() != target {
         return Err("已复制；请切换回原窗口后按 ⌘V".into());
     }
-    let source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState)
-        .map_err(|_| "无法创建粘贴事件")?;
+    let source =
+        CGEventSource::new(CGEventSourceStateID::Private).map_err(|_| "无法创建粘贴事件")?;
     for down in [true, false] {
         let e =
             CGEvent::new_keyboard_event(source.clone(), 9, down).map_err(|_| "无法创建粘贴事件")?;

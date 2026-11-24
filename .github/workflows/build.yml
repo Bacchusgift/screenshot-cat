@@ -81,6 +81,9 @@ jobs:
             src-tauri/binaries/BUILD-INFO.txt
             src-tauri/binaries/licenses/
           key: ffmpeg-8.0-${{ matrix.target }}-${{ hashFiles('scripts/build-ffmpeg.sh', 'scripts/prepare-ffmpeg.mjs') }}
+      - name: Install NASM for macOS Intel
+        if: matrix.target == 'x86_64-apple-darwin' && steps.ffmpeg.outputs.cache-hit != 'true'
+        run: command -v nasm || brew install nasm
       - name: Build bundled FFmpeg on macOS
         if: runner.os == 'macOS' && steps.ffmpeg.outputs.cache-hit != 'true'
         run: pnpm prepare:ffmpeg
@@ -124,7 +127,7 @@ jobs:
         run: |
           mkdir -p release
           cp LICENSE THIRD_PARTY_NOTICES.md scripts/build-ffmpeg.sh release/
-          cp src-tauri/binaries/BUILD-INFO.txt release/FFmpeg-BUILD-INFO.txt
+          cp src-tauri/binaries/BUILD-INFO.txt release/${{ matrix.artifact }}-FFmpeg-BUILD-INFO.txt
           cp src-tauri/binaries/licenses/FFmpeg-LGPL-2.1.txt release/
           curl --fail --location --retry 3 https://ffmpeg.org/releases/ffmpeg-8.0.tar.xz -o release/ffmpeg-8.0-source.tar.xz
       - uses: actions/upload-artifact@v4
@@ -153,5 +156,5 @@ jobs:
         shell: bash
         run: |
           mkdir -p publish
-          find release-artifacts -type f \( -name '*.exe' -o -name '*.dmg' -o -name '*.zip' -o -name 'ffmpeg-8.0-source.tar.xz' -o -name 'FFmpeg-LGPL-2.1.txt' -o -name 'THIRD_PARTY_NOTICES.md' -o -name 'LICENSE' -o -name 'build-ffmpeg.sh' \) -exec cp {} publish/ \;
+          find release-artifacts -type f \( -name '*.exe' -o -name '*.dmg' -o -name '*.zip' -o -name 'ffmpeg-8.0-source.tar.xz' -o -name 'FFmpeg-LGPL-2.1.txt' -o -name '*-FFmpeg-BUILD-INFO.txt' -o -name 'THIRD_PARTY_NOTICES.md' -o -name 'LICENSE' -o -name 'build-ffmpeg.sh' \) -exec cp {} publish/ \;
           gh release create "$GITHUB_REF_NAME" publish/* --verify-tag --generate-notes --title "截图猫 $GITHUB_REF_NAME"

@@ -159,8 +159,7 @@ async function use(id: string, paste: boolean) {
       "use_clipboard",
       { id, paste },
     );
-    if (!native && paste) status(result.message);
-    else if (!paste) status(result.message);
+    if (!native || !result.pasted) status(result.message);
   } finally {
     using = false;
   }

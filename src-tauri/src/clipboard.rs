@@ -281,6 +281,12 @@ pub fn copy_png(app: &tauri::AppHandle, bytes: &[u8]) -> Result<(), String> {
     Ok(())
 }
 pub fn request_shelf(app: &tauri::AppHandle, manual: bool) {
+    let target = crate::focus::current();
+    if target != 0 {
+        app.state::<History>()
+            .target
+            .store(target, Ordering::Relaxed);
+    }
     let app = app.clone();
     std::thread::spawn(move || {
         if let Err(e) = show_shelf(&app, manual) {
@@ -297,10 +303,6 @@ fn show_shelf(app: &tauri::AppHandle, manual: bool) -> Result<(), String> {
     let h = app.state::<History>();
     if manual {
         *h.notice.lock().map_err(err)? = None;
-    }
-    let target = crate::focus::current();
-    if target != 0 {
-        h.target.store(target, Ordering::Relaxed);
     }
     let existing = app.get_webview_window("clipboard");
     if !manual
@@ -411,6 +413,7 @@ pub async fn use_clipboard(
 ) -> Result<serde_json::Value, String> {
     allow(&window)?;
     let h = app.state::<History>();
+    let target = h.target.load(Ordering::Relaxed);
     let clip = h
         .items
         .lock()
@@ -422,39 +425,131 @@ pub async fn use_clipboard(
     if clip.kind == "text" {
         h.board(|b| b.set_text(clip.text.as_deref().unwrap_or_default()))?;
     } else {
-        let image = image::open(h.root.join(format!("{}.png", clip.id)))
-            .map_err(err)?
-            .into_rgba8();
-        h.board(|b| {
-            b.set_image(ImageData {
-                width: image.width() as usize,
-                height: image.height() as usize,
-                bytes: Cow::Borrowed(image.as_raw()),
-            })
-        })?;
+        let path = h.root.join(format!("{}.png", clip.id));
+        #[cfg(target_os = "macos")]
+        copy_pasteboard_image(
+            &objc2_app_kit::NSPasteboard::generalPasteboard(),
+            &fs::read(path).map_err(err)?,
+        )?;
+        #[cfg(not(target_os = "macos"))]
+        {
+            let image = image::open(path).map_err(err)?.into_rgba8();
+            h.board(|b| {
+                b.set_image(ImageData {
+                    width: image.width() as usize,
+                    height: image.height() as usize,
+                    bytes: Cow::Borrowed(image.as_raw()),
+                })
+            })?;
+        }
     }
     if !paste {
         return Ok(serde_json::json!({"pasted":false,"message":"已复制"}));
     }
     h.epoch.fetch_add(1, Ordering::SeqCst);
-    let target = h.target.load(Ordering::Relaxed);
-    if let Some(w) = app.get_webview_window("clipboard") {
-        w.hide().map_err(err)?;
+    let result = paste_in_target(&app, target).await;
+    match result {
+        Ok(()) => Ok(serde_json::json!({"pasted":true,"message":"已粘贴到原窗口"})),
+        Err(message) => {
+            if let Ok(mut notice) = h.notice.lock() {
+                *notice = Some(message.clone());
+            }
+            if app
+                .get_webview_window("clipboard")
+                .is_some_and(|w| !w.is_visible().unwrap_or(false))
+            {
+                show_shelf(&app, false)?;
+            }
+            Ok(serde_json::json!({"pasted":false,"message":message}))
+        }
     }
-    let result = tauri::async_runtime::spawn_blocking(move || {
+}
+#[cfg(target_os = "macos")]
+fn copy_pasteboard_image(board: &objc2_app_kit::NSPasteboard, bytes: &[u8]) -> Result<(), String> {
+    use objc2::{rc::Retained, runtime::ProtocolObject, AnyThread};
+    use objc2_app_kit::{
+        NSBitmapImageRep, NSPasteboardItem, NSPasteboardTypePNG, NSPasteboardTypeTIFF,
+        NSPasteboardWriting,
+    };
+    use objc2_foundation::{NSArray, NSData};
+
+    let png = NSData::with_bytes(bytes);
+    let bitmap = NSBitmapImageRep::initWithData(NSBitmapImageRep::alloc(), &png)
+        .ok_or("无法读取剪贴板图片")?;
+    let item = NSPasteboardItem::new();
+    unsafe {
+        if !item.setData_forType(&png, NSPasteboardTypePNG) {
+            return Err("无法复制图片".into());
+        }
+        if let Some(tiff) = bitmap.TIFFRepresentation() {
+            item.setData_forType(&tiff, NSPasteboardTypeTIFF);
+        }
+        let item: Retained<ProtocolObject<dyn NSPasteboardWriting>> =
+            ProtocolObject::from_retained(item);
+        board.clearContents();
+        if !board.writeObjects(&NSArray::from_retained_slice(&[item])) {
+            return Err("无法复制图片".into());
+        }
+    }
+    Ok(())
+}
+#[cfg(all(test, target_os = "macos"))]
+#[test]
+fn clipboard_image_exposes_png_and_tiff_to_target_apps() {
+    use objc2_app_kit::{NSPasteboard, NSPasteboardTypePNG, NSPasteboardTypeTIFF};
+    let pasteboard = NSPasteboard::pasteboardWithUniqueName();
+    let png = include_bytes!("../icons/32x32.png");
+    copy_pasteboard_image(&pasteboard, png).unwrap();
+    unsafe {
+        assert_eq!(
+            pasteboard
+                .dataForType(NSPasteboardTypePNG)
+                .unwrap()
+                .to_vec(),
+            png
+        );
+        assert!(!pasteboard
+            .dataForType(NSPasteboardTypeTIFF)
+            .unwrap()
+            .is_empty());
+    }
+}
+async fn paste_in_target(app: &tauri::AppHandle, target: i64) -> Result<(), String> {
+    let shelf = app.get_webview_window("clipboard");
+    #[cfg(target_os = "macos")]
+    {
+        if !crate::focus::can_paste() {
+            return Err(
+                "已复制。请在系统设置 → 隐私与安全性 → 辅助功能中允许截图猫，或按 ⌘V 手动粘贴。"
+                    .into(),
+            );
+        }
+        if target <= 0 {
+            return Err("已复制；请在目标应用中呼出剪贴板，或按 ⌘V 手动粘贴。".into());
+        }
+        let (send, receive) = tauri::async_runtime::channel(1);
+        app.run_on_main_thread(move || {
+            let result = objc2_foundation::MainThreadMarker::new()
+                .ok_or_else(|| "无法切换到原窗口".to_string())
+                .and_then(|marker| crate::focus::restore(target, marker));
+            let _ = send.try_send(result);
+        })
+        .map_err(err)?;
+        let mut receive = receive;
+        receive.recv().await.ok_or("无法切换到原窗口")??;
+        tauri::async_runtime::spawn_blocking(move || crate::focus::wait_until_active(target))
+            .await
+            .map_err(err)??;
+    }
+    if let Some(shelf) = shelf {
+        shelf.hide().map_err(err)?;
+    }
+    tauri::async_runtime::spawn_blocking(move || {
         std::thread::sleep(Duration::from_millis(100));
         crate::focus::paste(target)
     })
     .await
-    .map_err(err)?;
-    match result {
-        Ok(()) => Ok(serde_json::json!({"pasted":true,"message":"已粘贴到原窗口"})),
-        Err(message) => {
-            show_shelf(&app, false)?;
-            let _ = app.emit_to("clipboard", "clipboard-notice", &message);
-            Ok(serde_json::json!({"pasted":false,"message":message}))
-        }
-    }
+    .map_err(err)?
 }
 #[tauri::command]
 pub fn clear_clipboard_history(

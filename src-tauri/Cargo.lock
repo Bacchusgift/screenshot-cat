@@ -3878,6 +3878,7 @@ dependencies = [
  "base64 0.22.1",
  "core-graphics 0.24.0",
  "image",
+ "objc2",
  "objc2-app-kit",
  "objc2-foundation",
  "serde",

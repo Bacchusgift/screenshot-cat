@@ -11,7 +11,7 @@ cd ffmpeg-8.0
 case "$(uname -s)" in
  Darwin) platform_flags="--enable-avfoundation --enable-videotoolbox" ;;
  Linux) platform_flags="--enable-libxcb --enable-libxcb-shm --enable-libxcb-xfixes" ;;
- *) platform_flags="--enable-mediafoundation --target-os=mingw32 --arch=x86_64 --extra-ldflags=-static" ;;
+ *) platform_flags="--enable-mediafoundation --enable-d3d11va --target-os=mingw32 --arch=x86_64 --extra-ldflags=-static" ;;
 esac
 ./configure $platform_flags --disable-everything --disable-autodetect --disable-doc --disable-debug \
  --disable-network --disable-ffplay --disable-ffprobe --disable-shared --enable-static \
