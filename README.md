@@ -5,7 +5,7 @@
 
 轻巧的托盘截图、录屏与剪贴板工具。平时安静待命，需要时再呼出。
 
-[MIT](LICENSE) · Rust + Tauri 2 · 内置裁剪版 FFmpeg
+[项目主页](https://bacchusgift.github.io/screenshot-cat/) · [下载安装](https://github.com/Bacchusgift/screenshot-cat/releases/latest) · [MIT](LICENSE) · Rust + Tauri 2 · 内置裁剪版 FFmpeg
 </div>
 
 ## 使用方式

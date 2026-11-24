@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="截图猫是一个用 Rust 和 Tauri 构建的开源桌面工具。框选截图、录制 GIF 和视频、贴图、管理文字与图片剪贴板。">
+  <meta name="theme-color" content="#fff8ed">
+  <title>截图猫 · 截图、录屏与剪贴板</title>
+  <link rel="icon" href="cat.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="top wrap">
+    <a class="wordmark" href="./"><img src="cat.png" width="30" height="30" alt="">截图猫</a>
+    <nav aria-label="页面导航"><a href="#downloads">下载</a><a href="https://github.com/Bacchusgift/screenshot-cat">GitHub 源码</a></nav>
+  </header>
+  <main>
+    <section class="hero wrap" aria-labelledby="hero-title">
+      <div>
+        <p class="eyebrow">SCREENSHOT CAT / 桌面工具</p>
+        <h1 id="hero-title">一只住在<br>任务栏的截图猫。</h1>
+        <p class="intro">随时框选截图、录制和贴图。复制过的文字和图片，一按就能找回来。平时待在系统托盘或菜单栏。</p>
+        <a class="primary" href="#downloads">下载截图猫</a>
+        <p class="stack">MIT 开源 · Rust + Tauri · 内置 FFmpeg</p>
+      </div>
+      <div class="mascot"><img src="cat.png" width="256" height="256" alt="抱着绿色截图框的橘色像素猫"></div>
+    </section>
+    <section class="features wrap" aria-label="主要功能">
+      <article><h2>截完就能用</h2><p>区域截图自动保存为 PNG 并复制。可以画箭头和矩形，也能把图片置顶贴在桌面。</p><span>macOS <kbd>⌘ ⇧ 1</kbd> · Windows <kbd>Ctrl Shift 1</kbd></span></article>
+      <article><h2>把操作录下来</h2><p>录短 GIF 或持续录制 MP4；录制时可在选区内绘制，也能切回操作原窗口。当前仅录制画面。</p><span>macOS <kbd>⌘ ⇧ 2</kbd> · Windows <kbd>Ctrl Shift 2</kbd></span></article>
+      <article><h2>复制过的，找得回</h2><p>从桌面底部查看文字和图片，搜索后点击条目即可粘贴。剪贴板记录保存在本机。</p><span>macOS <kbd>⌘ Control V</kbd> · Windows <kbd>Ctrl Alt V</kbd></span></article>
+    </section>
+    <section class="downloads wrap" id="downloads" aria-labelledby="download-title">
+      <div><p class="eyebrow">DOWNLOAD</p><h2 id="download-title">选你的电脑</h2><p>macOS 请在「关于本机」查看芯片类型。</p></div>
+      <ul>
+        <li><div><strong>macOS · Apple Silicon</strong><span>适用于 M 系列芯片</span></div><a href="https://github.com/Bacchusgift/screenshot-cat/releases/latest/download/screenshot-cat-macos-arm64.dmg" aria-label="下载 Apple Silicon 版 DMG">DMG</a></li>
+        <li><div><strong>macOS · Intel</strong><span>适用于 Intel 处理器</span></div><a href="https://github.com/Bacchusgift/screenshot-cat/releases/latest/download/screenshot-cat-macos-x64.dmg" aria-label="下载 Intel Mac 版 DMG">DMG</a></li>
+        <li><div><strong>Windows · x64</strong><span>64 位安装程序</span></div><a href="https://github.com/Bacchusgift/screenshot-cat/releases/latest/download/screenshot-cat-windows-x64.exe" aria-label="下载 Windows x64 安装程序">EXE</a></li>
+      </ul>
+      <p class="install-note">macOS 安装包尚未经过 Apple 公证。截图与录制需要屏幕录制权限；跨应用自动粘贴需要辅助功能权限。<a href="https://github.com/Bacchusgift/screenshot-cat/releases/latest">查看版本说明、应用 ZIP 和第三方许可</a>。</p>
+    </section>
+  </main>
+  <footer class="wrap"><span>截图猫 · MIT License</span><a href="https://github.com/Bacchusgift/screenshot-cat/issues">反馈问题</a></footer>
+</body>
+</html>

@@ -3,6 +3,7 @@ on:
   push:
     branches: ['main', 'feat/**']
     tags: ['v*']
+    paths-ignore: ['docs/**', 'README.md']
   pull_request:
   workflow_dispatch:
 permissions:
@@ -156,5 +157,17 @@ jobs:
         shell: bash
         run: |
           mkdir -p publish
-          find release-artifacts -type f \( -name '*.exe' -o -name '*.dmg' -o -name '*.zip' -o -name 'ffmpeg-8.0-source.tar.xz' -o -name 'FFmpeg-LGPL-2.1.txt' -o -name '*-FFmpeg-BUILD-INFO.txt' -o -name 'THIRD_PARTY_NOTICES.md' -o -name 'LICENSE' -o -name 'build-ffmpeg.sh' \) -exec cp {} publish/ \;
+          for artifact in release-artifacts/screenshot-cat-*; do
+            case "$artifact" in
+              *-windows-x64) extension=exe ;;
+              *-macos-*) extension=dmg ;;
+            esac
+            mapfile -d '' installers < <(find "$artifact" -type f -name "*.$extension" -print0)
+            test "${#installers[@]}" -eq 1
+            cp "${installers[0]}" "publish/$(basename "$artifact").$extension"
+          done
+          test -f publish/screenshot-cat-windows-x64.exe
+          test -f publish/screenshot-cat-macos-arm64.dmg
+          test -f publish/screenshot-cat-macos-x64.dmg
+          find release-artifacts -type f \( -name '*.zip' -o -name 'ffmpeg-8.0-source.tar.xz' -o -name 'FFmpeg-LGPL-2.1.txt' -o -name '*-FFmpeg-BUILD-INFO.txt' -o -name 'THIRD_PARTY_NOTICES.md' -o -name 'LICENSE' -o -name 'build-ffmpeg.sh' \) -exec cp {} publish/ \;
           gh release create "$GITHUB_REF_NAME" publish/* --verify-tag --generate-notes --title "截图猫 $GITHUB_REF_NAME"
