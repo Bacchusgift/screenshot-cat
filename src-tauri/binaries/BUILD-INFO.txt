@@ -1,0 +1,16 @@
+ffmpeg version 8.0 Copyright (c) 2000-2025 the FFmpeg developers
+built with Apple clang version 16.0.0 (clang-1600.0.26.6)
+configuration: --enable-avfoundation --enable-videotoolbox --disable-everything --disable-autodetect --disable-doc --disable-debug --disable-network --disable-ffplay --disable-ffprobe --disable-shared --enable-static --enable-ffmpeg --enable-avdevice --enable-swscale --enable-avfilter --enable-protocol='file,pipe' --enable-indev='avfoundation,gdigrab,x11grab' --enable-demuxer=mov --enable-muxer='mp4,gif' --enable-decoder='h264,mpeg4,rawvideo' --enable-parser='h264,mpeg4video' --enable-encoder='mpeg4,gif,h264_videotoolbox,h264_mf' --enable-filter='crop,pad,fps,scale,split,palettegen,paletteuse,format,null' --extra-cflags=-Os --extra-ldflags= --enable-small
+libavutil      60.  8.100 / 60.  8.100
+libavcodec     62. 11.100 / 62. 11.100
+libavformat    62.  3.100 / 62.  3.100
+libavdevice    62.  1.100 / 62.  1.100
+libavfilter    11.  4.100 / 11.  4.100
+libswscale      9.  1.100 /  9.  1.100
+libswresample   6.  1.100 /  6.  1.100
+
+Exiting with exit code 0
+
+Source: https://ffmpeg.org/releases/ffmpeg-8.0.tar.xz
+Build: scripts/build-ffmpeg.sh
+No source modifications.

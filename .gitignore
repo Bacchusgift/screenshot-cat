@@ -1,0 +1,14 @@
+node_modules/
+dist/
+release/
+*.log
+test-results/
+playwright-report/
+src-tauri/target/
+src-tauri/binaries/ffmpeg-*
+artifacts/
+
+.DS_Store
+.env
+.env.*
+!.env.example

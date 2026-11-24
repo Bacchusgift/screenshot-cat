@@ -1,0 +1,15 @@
+{
+  "identifier": "utility",
+  "description": "Drawing and pin windows have only local window controls",
+  "windows": [
+    "overlay",
+    "controls",
+    "pin-*",
+    "clipboard"
+  ],
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-close"
+  ]
+}
