@@ -30,6 +30,7 @@ pub struct History {
     image_write: Mutex<()>,
     pub paused: AtomicBool,
     pub target: AtomicI64,
+    restored_sequence: Mutex<Option<i64>>,
     epoch: AtomicU64,
     opening: AtomicBool,
 }
@@ -54,6 +55,7 @@ impl History {
             image_write: Mutex::new(()),
             paused: AtomicBool::new(false),
             target: AtomicI64::new(0),
+            restored_sequence: Mutex::new(None),
             epoch: AtomicU64::new(0),
             opening: AtomicBool::new(false),
         })
@@ -209,12 +211,16 @@ pub fn watch(app: tauri::AppHandle) {
                     h.target.store(target, Ordering::Relaxed);
                 }
             }
-            let seq = sequence();
+            let (seq, restored) = match h.restored_sequence.lock() {
+                Ok(restored) => (sequence(), *restored),
+                Err(_) => continue,
+            };
             if h.paused.load(Ordering::Relaxed) {
                 last = seq;
                 continue;
             }
-            if seq.is_some() && last == seq {
+            if seq.is_some() && (last == seq || restored == seq) {
+                last = seq;
                 continue;
             }
             if concealed() {
@@ -422,26 +428,30 @@ pub async fn use_clipboard(
         .find(|i| i.id == id)
         .cloned()
         .ok_or("记录已被清理")?;
-    if clip.kind == "text" {
-        h.board(|b| b.set_text(clip.text.as_deref().unwrap_or_default()))?;
-    } else {
-        let path = h.root.join(format!("{}.png", clip.id));
-        #[cfg(target_os = "macos")]
-        copy_pasteboard_image(
-            &objc2_app_kit::NSPasteboard::generalPasteboard(),
-            &fs::read(path).map_err(err)?,
-        )?;
-        #[cfg(not(target_os = "macos"))]
-        {
-            let image = image::open(path).map_err(err)?.into_rgba8();
-            h.board(|b| {
-                b.set_image(ImageData {
-                    width: image.width() as usize,
-                    height: image.height() as usize,
-                    bytes: Cow::Borrowed(image.as_raw()),
-                })
-            })?;
+    {
+        let mut restored = h.restored_sequence.lock().map_err(err)?;
+        if clip.kind == "text" {
+            h.board(|b| b.set_text(clip.text.as_deref().unwrap_or_default()))?;
+        } else {
+            let path = h.root.join(format!("{}.png", clip.id));
+            #[cfg(target_os = "macos")]
+            copy_pasteboard_image(
+                &objc2_app_kit::NSPasteboard::generalPasteboard(),
+                &fs::read(path).map_err(err)?,
+            )?;
+            #[cfg(not(target_os = "macos"))]
+            {
+                let image = image::open(path).map_err(err)?.into_rgba8();
+                h.board(|b| {
+                    b.set_image(ImageData {
+                        width: image.width() as usize,
+                        height: image.height() as usize,
+                        bytes: Cow::Borrowed(image.as_raw()),
+                    })
+                })?;
+            }
         }
+        *restored = sequence();
     }
     if !paste {
         return Ok(serde_json::json!({"pasted":false,"message":"已复制"}));
