@@ -215,6 +215,15 @@ pub async fn select_region(
     app: tauri::AppHandle,
     rect: Rect,
 ) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || finish_region(window, app, rect))
+        .await
+        .map_err(err)?
+}
+fn finish_region(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    rect: Rect,
+) -> Result<(), String> {
     if window.label() != "overlay" {
         return Err("无效窗口".into());
     }
@@ -237,15 +246,26 @@ pub async fn select_region(
             .write_to(&mut out, image::ImageFormat::Png)
             .map_err(err)?;
         drop(selection);
-        restore(&app);
         let entry = new_entry("image", "png", rect.width, rect.height);
         fs::write(
             app.state::<State>().library.join(&entry.name),
             out.get_ref(),
         )
         .map_err(err)?;
-        save_entry(&app, entry)?;
-        clipboard::copy_png(&app, out.get_ref())?;
+        let entry = save_entry(&app, entry)?;
+        restore(&app);
+        let copied = clipboard::copy_png(&app, out.get_ref());
+        let pinned = pin_internal(&app, &entry);
+        let failures: Vec<_> = [("复制到剪贴板", copied), ("贴在桌面", pinned)]
+            .into_iter()
+            .filter_map(|(action, result)| result.err().map(|e| format!("{action}失败：{e}")))
+            .collect();
+        if !failures.is_empty() {
+            show_notice(
+                &app,
+                &format!("截图已留在历史记录。{}", failures.join("；")),
+            );
+        }
     } else {
         s.rect = Some(rect.clone());
         s.image.clear();

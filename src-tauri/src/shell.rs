@@ -46,12 +46,29 @@ pub fn show_notice(app: &tauri::AppHandle, message: &str) {
             *note = Some(message.into());
         }
     }
-    clipboard::request_shelf(app, false);
     let _ = app.emit_to("clipboard", "clipboard-notice", message);
 }
 pub fn request_capture(app: &tauri::AppHandle, mode: &str) {
     let app = app.clone();
     let mode = mode.to_string();
+    #[cfg(target_os = "macos")]
+    if !screen_permission() {
+        use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+        let a = app.clone();
+        app.dialog()
+            .message("当前安装的截图猫没有屏幕录制权限。如果系统设置里已经开启，请移除旧条目，重新添加当前安装的截图猫，然后退出并重新打开。")
+            .title("截图猫需要屏幕录制权限")
+            .kind(MessageDialogKind::Warning)
+            .buttons(MessageDialogButtons::OkCancelCustom("打开屏幕录制设置".into(), "稍后".into()))
+            .show(move |open| {
+                if open {
+                    if let Err(e) = open_screen_recording_settings() {
+                        show_notice(&a, &e);
+                    }
+                }
+            });
+        return;
+    }
     tauri::async_runtime::spawn(async move {
         if let Err(e) = capture::begin_internal(app.clone(), mode, None).await {
             show_notice(&app, &e);
@@ -121,7 +138,7 @@ pub fn install_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Er
             "capture" => request_capture(app, "image"),
             "gif" => request_capture(app, "gif"),
             "video" => request_capture(app, "video"),
-            "clipboard" => clipboard::request_shelf(app, true),
+            "clipboard" => clipboard::request_shelf(app),
             "history" | "settings" => open_panel(app, e.id.as_ref()),
             "stop" => {
                 let a = app.clone();

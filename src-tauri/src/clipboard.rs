@@ -4,7 +4,7 @@ use arboard::{Clipboard, ImageData};
 use sha2::{Digest, Sha256};
 use std::{
     borrow::Cow,
-    sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering},
+    sync::atomic::{AtomicBool, AtomicI64, Ordering},
     time::Duration,
 };
 const MAX_ITEMS: usize = 100;
@@ -31,7 +31,6 @@ pub struct History {
     pub paused: AtomicBool,
     pub target: AtomicI64,
     restored_sequence: Mutex<Option<i64>>,
-    epoch: AtomicU64,
     opening: AtomicBool,
 }
 impl History {
@@ -56,7 +55,6 @@ impl History {
             paused: AtomicBool::new(false),
             target: AtomicI64::new(0),
             restored_sequence: Mutex::new(None),
-            epoch: AtomicU64::new(0),
             opening: AtomicBool::new(false),
         })
     }
@@ -187,9 +185,7 @@ fn concealed() -> bool {
 pub fn watch(app: tauri::AppHandle) {
     std::thread::spawn(move || {
         let mut last = None;
-        let mut first_pass = true;
         loop {
-            let initial = std::mem::replace(&mut first_pass, false);
             std::thread::sleep(Duration::from_millis(if cfg!(target_os = "linux") {
                 1200
             } else {
@@ -243,16 +239,6 @@ pub fn watch(app: tauri::AppHandle) {
                     ) {
                         if h.image(rgba).unwrap_or(false) {
                             let _ = app.emit_to("clipboard", "clipboard-changed", ());
-                            if !initial
-                                && app
-                                    .state::<State>()
-                                    .selection
-                                    .lock()
-                                    .map(|s| s.is_none())
-                                    .unwrap_or(false)
-                            {
-                                request_shelf(&app, false);
-                            }
                         }
                     }
                 }
@@ -274,6 +260,7 @@ pub fn watch(app: tauri::AppHandle) {
 pub fn copy_png(app: &tauri::AppHandle, bytes: &[u8]) -> Result<(), String> {
     let image = image::load_from_memory(bytes).map_err(err)?.into_rgba8();
     let h = app.state::<History>();
+    let mut own_write = h.restored_sequence.lock().map_err(err)?;
     h.board(|b| {
         b.set_image(ImageData {
             width: image.width() as usize,
@@ -281,12 +268,13 @@ pub fn copy_png(app: &tauri::AppHandle, bytes: &[u8]) -> Result<(), String> {
             bytes: Cow::Borrowed(image.as_raw()),
         })
     })?;
+    *own_write = sequence();
+    drop(own_write);
     h.image(image)?;
     let _ = app.emit_to("clipboard", "clipboard-changed", ());
-    request_shelf(app, false);
     Ok(())
 }
-pub fn request_shelf(app: &tauri::AppHandle, manual: bool) {
+pub fn request_shelf(app: &tauri::AppHandle) {
     let target = crate::focus::current();
     if target != 0 {
         app.state::<History>()
@@ -295,7 +283,7 @@ pub fn request_shelf(app: &tauri::AppHandle, manual: bool) {
     }
     let app = app.clone();
     std::thread::spawn(move || {
-        if let Err(e) = show_shelf(&app, manual) {
+        if let Err(e) = show_shelf(&app) {
             if let Ok(mut note) = app.state::<History>().notice.lock() {
                 *note = Some(e);
             }
@@ -305,20 +293,9 @@ pub fn request_shelf(app: &tauri::AppHandle, manual: bool) {
         }
     });
 }
-fn show_shelf(app: &tauri::AppHandle, manual: bool) -> Result<(), String> {
+fn show_shelf(app: &tauri::AppHandle) -> Result<(), String> {
     let h = app.state::<History>();
-    if manual {
-        *h.notice.lock().map_err(err)? = None;
-    }
     let existing = app.get_webview_window("clipboard");
-    if !manual
-        && existing
-            .as_ref()
-            .is_some_and(|w| w.is_visible().unwrap_or(false) && w.is_focused().unwrap_or(false))
-    {
-        let _ = app.emit_to("clipboard", "clipboard-changed", ());
-        return Ok(());
-    }
     let w = if let Some(w) = existing {
         w
     } else {
@@ -361,25 +338,9 @@ fn show_shelf(app: &tauri::AppHandle, manual: bool) -> Result<(), String> {
         work.position.y + work.size.height as i32 - (height * scale) as i32 - (12.0 * scale) as i32,
     ))
     .map_err(err)?;
-    w.set_focusable(manual).map_err(err)?;
     w.show().map_err(err)?;
-    if manual {
-        w.set_focus().map_err(err)?;
-    }
-    let epoch = h.epoch.fetch_add(1, Ordering::SeqCst) + 1;
-    let _ = app.emit_to("clipboard", "shelf-shown", manual);
-    if !manual {
-        let a = app.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_secs(6));
-            let h = a.state::<History>();
-            if h.epoch.load(Ordering::SeqCst) == epoch {
-                if let Some(w) = a.get_webview_window("clipboard") {
-                    let _ = w.hide();
-                }
-            }
-        });
-    }
+    w.set_focus().map_err(err)?;
+    let _ = app.emit_to("clipboard", "shelf-shown", ());
     Ok(())
 }
 fn allow(w: &tauri::WebviewWindow) -> Result<(), String> {
@@ -400,14 +361,10 @@ pub fn clipboard_items(
     )
 }
 #[tauri::command]
-pub fn hide_clipboard(
-    window: tauri::WebviewWindow,
-    state: tauri::State<History>,
-) -> Result<(), String> {
+pub fn hide_clipboard(window: tauri::WebviewWindow) -> Result<(), String> {
     if window.label() != "clipboard" {
         return Err("无效窗口".into());
     }
-    state.epoch.fetch_add(1, Ordering::SeqCst);
     window.hide().map_err(err)
 }
 #[tauri::command]
@@ -456,20 +413,11 @@ pub async fn use_clipboard(
     if !paste {
         return Ok(serde_json::json!({"pasted":false,"message":"已复制"}));
     }
-    h.epoch.fetch_add(1, Ordering::SeqCst);
     let result = paste_in_target(&app, target).await;
     match result {
         Ok(()) => Ok(serde_json::json!({"pasted":true,"message":"已粘贴到原窗口"})),
         Err(message) => {
-            if let Ok(mut notice) = h.notice.lock() {
-                *notice = Some(message.clone());
-            }
-            if app
-                .get_webview_window("clipboard")
-                .is_some_and(|w| !w.is_visible().unwrap_or(false))
-            {
-                show_shelf(&app, false)?;
-            }
+            show_notice(&app, &message);
             Ok(serde_json::json!({"pasted":false,"message":message}))
         }
     }

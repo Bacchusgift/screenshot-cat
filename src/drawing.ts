@@ -1,6 +1,12 @@
-export type Tool = "pen" | "arrow" | "rectangle";
+export type Tool = "pen" | "arrow" | "rectangle" | "text" | "number";
 type Point = { x: number; y: number };
-type Stroke = { tool: Tool; color: string; width: number; points: Point[] };
+type Stroke = {
+  tool: Tool;
+  color: string;
+  width: number;
+  points: Point[];
+  label?: string;
+};
 export class Drawing {
   tool: Tool = "pen";
   color = "#e5484d";
@@ -8,6 +14,7 @@ export class Drawing {
   strokes: Stroke[] = [];
   current: Stroke | null = null;
   background: HTMLImageElement | null = null;
+  requestText?: (point: Point, commit: (text: string) => void) => void;
   private ctx: CanvasRenderingContext2D;
   private abort = new AbortController();
   constructor(
@@ -23,12 +30,33 @@ export class Drawing {
       "pointerdown",
       (e) => {
         if (e.button !== 0) return;
+        const point = this.point(e);
+        if (this.tool === "text" || this.tool === "number") {
+          const { tool, color, width } = this;
+          const add = (label: string) => {
+            if (!label.trim()) return;
+            this.strokes.push({ tool, color, width, points: [point], label });
+            this.render();
+          };
+          if (tool === "number") {
+            add(
+              String(
+                this.strokes.filter((stroke) => stroke.tool === "number")
+                  .length + 1,
+              ),
+            );
+          } else {
+            e.preventDefault();
+            this.requestText?.(point, add);
+          }
+          return;
+        }
         canvas.setPointerCapture(e.pointerId);
         this.current = {
           tool: this.tool,
           color: this.color,
           width: this.width,
-          points: [this.point(e)],
+          points: [point],
         };
         this.render();
       },
@@ -39,7 +67,7 @@ export class Drawing {
       (e) => {
         if (!this.current) return;
         const p = this.point(e);
-        if (this.tool === "pen") this.current.points.push(p);
+        if (this.current.tool === "pen") this.current.points.push(p);
         else this.current.points[1] = p;
         this.render();
       },
@@ -86,6 +114,28 @@ export class Drawing {
       c.lineCap = "round";
       c.lineJoin = "round";
       c.beginPath();
+      if (stroke.label !== undefined) {
+        c.save();
+        c.textBaseline = "middle";
+        c.textAlign = stroke.tool === "number" ? "center" : "left";
+        const radius = Math.max(12, stroke.width * 4);
+        c.font = `bold ${stroke.tool === "number" ? radius * 1.15 : Math.max(18, stroke.width * 6)}px system-ui, sans-serif`;
+        if (stroke.tool === "number") {
+          c.arc(a.x, a.y, radius, 0, Math.PI * 2);
+          c.fill();
+          c.strokeStyle = "#fff";
+          c.lineWidth = Math.max(1, stroke.width / 2);
+          c.stroke();
+          c.fillStyle = "#fff";
+        } else {
+          c.strokeStyle = "#fff";
+          c.lineWidth = Math.max(2, stroke.width / 2);
+          c.strokeText(stroke.label, a.x, a.y);
+        }
+        c.fillText(stroke.label, a.x, a.y);
+        c.restore();
+        continue;
+      }
       if (stroke.tool === "rectangle") {
         c.strokeRect(a.x, a.y, b.x - a.x, b.y - a.y);
         continue;

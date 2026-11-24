@@ -90,14 +90,14 @@ export async function clipboard() {
     }
   });
   await on("clipboard-changed", () => load().catch(handleError));
-  await on<boolean>("shelf-shown", (manual) => {
+  await on("shelf-shown", () => {
     query = "";
     search.value = "";
     filter = "all";
     selected = 0;
     load()
       .then(() => {
-        if (manual) root.querySelector<HTMLElement>(".shelf-list")!.focus();
+        root.querySelector<HTMLElement>(".shelf-list")!.focus();
       })
       .catch(handleError);
   });

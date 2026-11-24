@@ -46,6 +46,7 @@ export async function call<T = void>(
       command,
       args,
     ) as Promise<T>;
+  if (command === "screen_permission_status") return true as T;
   if (command === "init")
     return {
       entries: (await store("readonly", (s) => s.getAll())).sort(
