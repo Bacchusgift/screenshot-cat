@@ -259,6 +259,9 @@ pub fn watch(app: tauri::AppHandle) {
 }
 pub fn copy_png(app: &tauri::AppHandle, bytes: &[u8]) -> Result<(), String> {
     let image = image::load_from_memory(bytes).map_err(err)?.into_rgba8();
+    copy_rgba(app, image)
+}
+pub fn copy_rgba(app: &tauri::AppHandle, image: image::RgbaImage) -> Result<(), String> {
     let h = app.state::<History>();
     let mut own_write = h.restored_sequence.lock().map_err(err)?;
     h.board(|b| {
@@ -270,8 +273,29 @@ pub fn copy_png(app: &tauri::AppHandle, bytes: &[u8]) -> Result<(), String> {
     })?;
     *own_write = sequence();
     drop(own_write);
-    h.image(image)?;
-    let _ = app.emit_to("clipboard", "clipboard-changed", ());
+    let app_handle = app.clone();
+    std::thread::spawn(move || {
+        let h = app_handle.state::<History>();
+        if h.image(image).is_ok() {
+            let _ = app_handle.emit_to("clipboard", "clipboard-changed", ());
+        }
+    });
+    Ok(())
+}
+pub fn copy_text(app: &tauri::AppHandle, text: &str) -> Result<(), String> {
+    let h = app.state::<History>();
+    let mut own_write = h.restored_sequence.lock().map_err(err)?;
+    h.board(|b| b.set_text(text))?;
+    *own_write = sequence();
+    drop(own_write);
+    let text = text.to_string();
+    let app_handle = app.clone();
+    std::thread::spawn(move || {
+        let h = app_handle.state::<History>();
+        if h.text(text).unwrap_or(false) {
+            let _ = app_handle.emit_to("clipboard", "clipboard-changed", ());
+        }
+    });
     Ok(())
 }
 pub fn request_shelf(app: &tauri::AppHandle) {
@@ -356,8 +380,12 @@ pub fn clipboard_items(
     state: tauri::State<History>,
 ) -> Result<serde_json::Value, String> {
     allow(&window)?;
+    #[cfg(target_os = "macos")]
+    let can_paste = crate::focus::can_paste();
+    #[cfg(not(target_os = "macos"))]
+    let can_paste = true;
     Ok(
-        serde_json::json!({"items":*state.items.lock().map_err(err)?,"root":state.root,"paused":state.paused.load(Ordering::Relaxed),"notice":*state.notice.lock().map_err(err)?,"shortcut":if cfg!(target_os="macos"){"⌘ Control V"}else{"Ctrl Alt V"}}),
+        serde_json::json!({"items":*state.items.lock().map_err(err)?,"root":state.root,"paused":state.paused.load(Ordering::Relaxed),"notice":*state.notice.lock().map_err(err)?,"canPaste":can_paste,"shortcut":if cfg!(target_os="macos"){"⌘ Control V"}else{"Ctrl Alt V"}}),
     )
 }
 #[tauri::command]
@@ -475,13 +503,16 @@ fn clipboard_image_exposes_png_and_tiff_to_target_apps() {
 async fn paste_in_target(app: &tauri::AppHandle, target: i64) -> Result<(), String> {
     let shelf = app.get_webview_window("clipboard");
     #[cfg(target_os = "macos")]
+    if !crate::focus::can_paste() {
+        return Err(
+            "已复制。请在系统设置 → 隐私与安全性 → 辅助功能中允许截图猫，或按 ⌘V 手动粘贴。".into(),
+        );
+    }
+    if let Some(shelf) = shelf {
+        shelf.hide().map_err(err)?;
+    }
+    #[cfg(target_os = "macos")]
     {
-        if !crate::focus::can_paste() {
-            return Err(
-                "已复制。请在系统设置 → 隐私与安全性 → 辅助功能中允许截图猫，或按 ⌘V 手动粘贴。"
-                    .into(),
-            );
-        }
         if target <= 0 {
             return Err("已复制；请在目标应用中呼出剪贴板，或按 ⌘V 手动粘贴。".into());
         }
@@ -499,11 +530,8 @@ async fn paste_in_target(app: &tauri::AppHandle, target: i64) -> Result<(), Stri
             .await
             .map_err(err)??;
     }
-    if let Some(shelf) = shelf {
-        shelf.hide().map_err(err)?;
-    }
     tauri::async_runtime::spawn_blocking(move || {
-        std::thread::sleep(Duration::from_millis(100));
+        std::thread::sleep(Duration::from_millis(120));
         crate::focus::paste(target)
     })
     .await

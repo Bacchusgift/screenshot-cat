@@ -16,6 +16,7 @@ export interface ClipboardState {
   paused: boolean;
   shortcut: string;
   notice?: string | null;
+  canPaste?: boolean;
 }
 const root = document.querySelector<HTMLDivElement>("#app")!;
 let state: ClipboardState,
@@ -150,6 +151,22 @@ function render() {
         ? "已暂停记录 · 现有内容仍可粘贴"
         : `${state.items.length} 条 · 仅保存在本机 · ${state.shortcut} 呼出`),
   );
+  const footer = root.querySelector<HTMLElement>(".shelf-footer")!;
+  let permButton = footer.querySelector<HTMLButtonElement>("[data-open-accessibility]");
+  if (native && state.canPaste === false) {
+    if (!permButton) {
+      permButton = document.createElement("button");
+      permButton.className = "clip-mini";
+      permButton.dataset.openAccessibility = "1";
+      permButton.textContent = "开启自动粘贴权限";
+      permButton.addEventListener("click", () => {
+        call("open_accessibility_settings").catch(handleError);
+      });
+      footer.insertBefore(permButton, footer.querySelector(".shelf-key-hint"));
+    }
+  } else {
+    permButton?.remove();
+  }
 }
 async function use(id: string, paste: boolean) {
   if (using) return;

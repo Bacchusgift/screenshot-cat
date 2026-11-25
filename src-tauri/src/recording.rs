@@ -1,5 +1,10 @@
 use super::*;
 use crate::capture::Selection;
+#[cfg(target_os = "macos")]
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::{
     io::{BufRead, BufReader, Write},
     process::{Child, Command, Stdio},
@@ -7,6 +12,10 @@ use std::{
 };
 pub struct Recording {
     child: Child,
+    #[cfg(target_os = "macos")]
+    stop_flag: Option<Arc<AtomicBool>>,
+    #[cfg(target_os = "macos")]
+    feeder: Option<std::thread::JoinHandle<()>>,
     entry: Entry,
     started: Instant,
     log: PathBuf,
@@ -67,29 +76,19 @@ fn input_args(s: &Selection, fps: u32) -> Result<Vec<String>, String> {
     let args: Vec<String>;
     #[cfg(target_os = "macos")]
     {
-        // AVFoundation's "Capture screen N" follows CGGetActiveDisplayList order.
-        let ids = core_graphics::display::CGDisplay::active_displays()
-            .map_err(|e| format!("无法枚举屏幕：{e}"))?;
-        let index = ids
-            .iter()
-            .position(|id| *id == s.monitor_id)
-            .ok_or("显示器已断开")?;
         args = vec![
             "-f".into(),
-            "avfoundation".into(),
+            "rawvideo".into(),
+            "-pixel_format".into(),
+            "rgba".into(),
+            "-video_size".into(),
+            format!("{}x{}", r.width, r.height),
             "-framerate".into(),
             fps.to_string(),
-            "-capture_cursor".into(),
-            "1".into(),
-            "-pixel_format".into(),
-            "nv12".into(),
             "-i".into(),
-            format!("Capture screen {index}:none"),
+            "pipe:0".into(),
             "-vf".into(),
-            format!(
-                "crop={}:{}:{}:{},pad=ceil(iw/2)*2:ceil(ih/2)*2",
-                r.width, r.height, r.x, r.y
-            ),
+            "pad=ceil(iw/2)*2:ceil(ih/2)*2".into(),
         ];
     }
     #[cfg(target_os = "windows")]
@@ -174,6 +173,12 @@ pub async fn start_recording(
     if let Err(ref message) = result {
         restore(&app);
         show_notice(&app, message);
+        use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+        app.dialog()
+            .message(message)
+            .title("录制未能启动")
+            .kind(MessageDialogKind::Warning)
+            .show(|_| {});
     }
     result
 }
@@ -192,10 +197,11 @@ fn start_internal(app: &tauri::AppHandle) -> Result<(), String> {
     let r = s.rect.as_ref().ok_or("请先选择区域")?;
     let settings = state.settings.lock().map_err(err)?.clone();
     let binary = ffmpeg_path(app)?;
+    let fps = if s.mode == "gif" { 15 } else { settings.fps };
     let entry = new_entry(&s.mode, "mp4", r.width, r.height);
     let output = state.library.join(&entry.name);
     let log = state.library.join(format!("{}.log", entry.id));
-    let args = input_args(&s, if s.mode == "gif" { 15 } else { settings.fps })?;
+    let args = input_args(&s, fps)?;
     if let Some(w) = app.get_webview_window("overlay") {
         w.set_ignore_cursor_events(true).map_err(err)?;
         w.emit("recording-started", ()).map_err(err)?;
@@ -208,6 +214,10 @@ fn start_internal(app: &tauri::AppHandle) -> Result<(), String> {
             vec![false]
         };
     let mut active = None;
+    #[cfg(target_os = "macos")]
+    let mut active_stop: Option<Arc<AtomicBool>> = None;
+    #[cfg(target_os = "macos")]
+    let mut active_feeder: Option<std::thread::JoinHandle<()>> = None;
     let mut last_error = String::new();
     for hardware in attempts {
         let log_file = fs::File::create(&log).map_err(err)?;
@@ -239,6 +249,74 @@ fn start_internal(app: &tauri::AppHandle) -> Result<(), String> {
             .stderr(log_file)
             .spawn()
             .map_err(err)?;
+        #[cfg(target_os = "macos")]
+        let (stop_flag, mut feeder) = {
+            let stdin = child.stdin.take().ok_or("无法打开录制输入管道")?;
+            let stop_flag = Arc::new(AtomicBool::new(false));
+            let flag = stop_flag.clone();
+            let monitor_id = s.monitor_id;
+            let monitor_index = s.monitor_index;
+            let rect = r.clone();
+            let max_duration = if s.mode == "gif" {
+                Some(Duration::from_secs(15))
+            } else {
+                None
+            };
+            let handle = std::thread::spawn(move || {
+                let mut stdin = stdin;
+                let list = match xcap::Monitor::all() {
+                    Ok(list) => list,
+                    Err(_) => return,
+                };
+                let Some(monitor) = list
+                    .into_iter()
+                    .enumerate()
+                    .find(|(i, m)| m.id().ok() == Some(monitor_id) || *i == monitor_index)
+                    .map(|(_, m)| m)
+                else {
+                    return;
+                };
+                let interval = Duration::from_secs_f64(1.0 / fps.max(1) as f64);
+                let start_time = Instant::now();
+                let mut next_tick = start_time;
+                let mut buf = vec![0u8; (rect.width * rect.height * 4) as usize];
+                while !flag.load(Ordering::Relaxed) {
+                    if let Some(limit) = max_duration {
+                        if start_time.elapsed() >= limit {
+                            break;
+                        }
+                    }
+                    if let Ok(full) = monitor.capture_image() {
+                        let fw = full.width();
+                        let fh = full.height();
+                        if rect.x + rect.width <= fw && rect.y + rect.height <= fh {
+                            let src = full.as_raw();
+                            let row_bytes = (rect.width * 4) as usize;
+                            let src_stride = (fw * 4) as usize;
+                            for row in 0..rect.height as usize {
+                                let src_off =
+                                    (rect.y as usize + row) * src_stride + (rect.x as usize * 4);
+                                let dst_off = row * row_bytes;
+                                buf[dst_off..dst_off + row_bytes]
+                                    .copy_from_slice(&src[src_off..src_off + row_bytes]);
+                            }
+                            if stdin.write_all(&buf).is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    next_tick += interval;
+                    let now = Instant::now();
+                    if next_tick > now {
+                        std::thread::sleep(next_tick - now);
+                    } else {
+                        next_tick = now;
+                    }
+                }
+                let _ = stdin.flush();
+            });
+            (stop_flag, Some(handle))
+        };
         // A living child is not proof of recording: permission prompts can stall
         // capture indefinitely. Only acknowledge a session after the first frame.
         let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
@@ -267,8 +345,14 @@ fn start_internal(app: &tauri::AppHandle) -> Result<(), String> {
                 break;
             }
             if Instant::now() > deadline {
+                #[cfg(target_os = "macos")]
+                stop_flag.store(true, Ordering::SeqCst);
                 let _ = child.kill();
                 let _ = child.wait();
+                #[cfg(target_os = "macos")]
+                if let Some(handle) = feeder.take() {
+                    let _ = handle.join();
+                }
                 last_error =
                     "12 秒内未收到画面，请授予应用及内置 FFmpeg 屏幕录制权限后重启应用".into();
                 break;
@@ -276,7 +360,19 @@ fn start_internal(app: &tauri::AppHandle) -> Result<(), String> {
         }
         if ready {
             active = Some(child);
+            #[cfg(target_os = "macos")]
+            {
+                active_stop = Some(stop_flag);
+                active_feeder = feeder.take();
+            }
             break;
+        }
+        #[cfg(target_os = "macos")]
+        {
+            stop_flag.store(true, Ordering::SeqCst);
+            if let Some(handle) = feeder.take() {
+                let _ = handle.join();
+            }
         }
         if last_error.starts_with("12 秒") {
             break;
@@ -297,6 +393,10 @@ fn start_internal(app: &tauri::AppHandle) -> Result<(), String> {
     let id = entry.id.clone();
     *guard = Some(Recording {
         child,
+        #[cfg(target_os = "macos")]
+        stop_flag: active_stop,
+        #[cfg(target_os = "macos")]
+        feeder: active_feeder,
         entry,
         started: Instant::now(),
         log,
@@ -356,6 +456,15 @@ pub fn stop_internal(app: &tauri::AppHandle) -> Result<(), String> {
             Some(r) => r,
             None => return Ok(()),
         };
+        #[cfg(target_os = "macos")]
+        {
+            if let Some(flag) = r.stop_flag.take() {
+                flag.store(true, Ordering::SeqCst);
+            }
+            if let Some(feeder) = r.feeder.take() {
+                let _ = feeder.join();
+            }
+        }
         if let Some(stdin) = r.child.stdin.as_mut() {
             let _ = stdin.write_all(b"q\n");
             let _ = stdin.flush();
@@ -434,6 +543,14 @@ fn finish(app: &tauri::AppHandle, failed: bool) -> Result<(), String> {
     let _ = app.emit_to("main", "recording-finished", ());
     if result.is_ok() {
         show_notice(app, "录制已保存，可从托盘菜单打开截图与视频记录");
+        open_panel(app, "history");
+    } else if let Err(ref message) = result {
+        use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+        app.dialog()
+            .message(message)
+            .title("录制保存失败")
+            .kind(MessageDialogKind::Warning)
+            .show(|_| {});
     }
     result
 }
@@ -471,12 +588,14 @@ mod tests {
             monitor_id: 0,
             monitor_index: 0,
             image: String::new(),
+            raw_image: None,
             width: 1920,
             height: 1080,
             scale: 1.0,
             origin_x: 0,
             origin_y: 0,
             rect: None,
+            windows: Vec::new(),
         };
         assert!(input_args(&s, 30).is_err());
     }

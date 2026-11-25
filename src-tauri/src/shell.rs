@@ -168,7 +168,7 @@ pub fn install_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Er
                         )
                         .map_err(err)?;
                         save_entry(&a, entry.clone())?;
-                        pin_internal(&a, &entry)
+                        pin_internal(&a, &entry, None)
                     })();
                     if let Err(e) = result {
                         show_notice(&a, &e);

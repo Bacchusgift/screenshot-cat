@@ -1,6 +1,6 @@
 [package]
 name = "screenshot-cat"
-version = "0.3.1"
+version = "0.3.2"
 description = "Lightweight screenshots, desktop pins and annotated recording"
 authors = ["Bacchusgift"]
 edition = "2021"

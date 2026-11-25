@@ -37,4 +37,5 @@ export interface Selection {
   height: number;
   scale: number;
   rect?: Rect;
+  windows?: Rect[];
 }

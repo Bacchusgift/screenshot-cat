@@ -57,20 +57,32 @@ pub fn wait_until_active(target: i64) -> Result<(), String> {
 #[cfg(target_os = "macos")]
 pub fn paste(target: i64) -> Result<(), String> {
     use core_graphics::{
-        event::{CGEvent, CGEventFlags},
+        event::{CGEvent, CGEventFlags, CGEventTapLocation},
         event_source::{CGEventSource, CGEventSourceStateID},
     };
     if target <= 0 || current() != target {
         return Err("已复制；请切换回原窗口后按 ⌘V".into());
     }
     let source =
-        CGEventSource::new(CGEventSourceStateID::Private).map_err(|_| "无法创建粘贴事件")?;
-    for down in [true, false] {
-        let e =
-            CGEvent::new_keyboard_event(source.clone(), 9, down).map_err(|_| "无法创建粘贴事件")?;
-        e.set_flags(CGEventFlags::CGEventFlagCommand);
-        e.post_to_pid(target as i32);
-    }
+        CGEventSource::new(CGEventSourceStateID::HIDSystemState).map_err(|_| "无法创建粘贴事件")?;
+    let cmd_down =
+        CGEvent::new_keyboard_event(source.clone(), 55, true).map_err(|_| "无法创建粘贴事件")?;
+    cmd_down.set_flags(CGEventFlags::CGEventFlagCommand);
+    let v_down =
+        CGEvent::new_keyboard_event(source.clone(), 9, true).map_err(|_| "无法创建粘贴事件")?;
+    v_down.set_flags(CGEventFlags::CGEventFlagCommand);
+    let v_up =
+        CGEvent::new_keyboard_event(source.clone(), 9, false).map_err(|_| "无法创建粘贴事件")?;
+    v_up.set_flags(CGEventFlags::CGEventFlagCommand);
+    let cmd_up = CGEvent::new_keyboard_event(source, 55, false).map_err(|_| "无法创建粘贴事件")?;
+    cmd_up.set_flags(CGEventFlags::CGEventFlagNull);
+    cmd_down.post(CGEventTapLocation::HID);
+    std::thread::sleep(std::time::Duration::from_millis(12));
+    v_down.post(CGEventTapLocation::HID);
+    std::thread::sleep(std::time::Duration::from_millis(12));
+    v_up.post(CGEventTapLocation::HID);
+    std::thread::sleep(std::time::Duration::from_millis(12));
+    cmd_up.post(CGEventTapLocation::HID);
     Ok(())
 }
 #[cfg(target_os = "windows")]

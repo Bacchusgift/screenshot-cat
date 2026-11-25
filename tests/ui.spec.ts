@@ -122,7 +122,7 @@ test("松开截图选区立即提交，不出现额外按钮", async ({ page }) 
     });
   }, pinFixture);
   await page.goto("http://127.0.0.1:5173/?view=overlay");
-  await expect(page.getByText("拖动选择截图区域")).toBeVisible();
+  await expect(page.locator(".selection-hint")).toBeVisible();
   await page.mouse.move(110, 150);
   await page.mouse.down();
   await page.mouse.move(520, 380, { steps: 6 });
@@ -139,6 +139,77 @@ test("松开截图选区立即提交，不出现额外按钮", async ({ page }) 
       rect: { x: 220, y: 300, width: 820, height: 460 },
     });
   await expect(page.getByRole("button")).toHaveCount(0);
+});
+
+test("截图选区支持窗口自动识别、像素放大镜取色与 Shift 微调", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 800, height: 600 });
+  await page.addInitScript((image) => {
+    const calls: { name: string; args: unknown }[] = [];
+    Object.assign(window, {
+      isTauri: true,
+      overlayCalls: calls,
+      __TAURI_INTERNALS__: {
+        transformCallback: () => 1,
+        invoke: async (name: string, args: unknown) => {
+          if (name === "overlay_data")
+            return {
+              mode: "image",
+              image,
+              width: 1600,
+              height: 1200,
+              scale: 2,
+              windows: [{ x: 200, y: 160, width: 600, height: 400 }],
+            };
+          calls.push({ name, args });
+        },
+      },
+    });
+  }, pinFixture);
+  await page.goto("http://127.0.0.1:5173/?view=overlay");
+  await expect(page.locator(".selection-hint")).toBeVisible();
+  await page.mouse.move(250, 180);
+  await expect(page.locator(".selection-box")).toBeVisible();
+  await expect(page.locator(".selection-loupe")).toBeVisible();
+  await page.keyboard.press("c");
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            window as Window & {
+              overlayCalls?: { name: string; args: unknown }[];
+            }
+          ).overlayCalls?.map((c) => c.name),
+      ),
+    )
+    .toContain("copy_overlay_color");
+  await page.keyboard.down("Shift");
+  await page.mouse.move(100, 120);
+  await page.mouse.down();
+  await page.mouse.move(300, 260, { steps: 4 });
+  await page.mouse.up();
+  await page.keyboard.up("Shift");
+  await expect(
+    page.getByRole("button", { name: "贴图并复制" }),
+  ).toBeVisible();
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("Enter");
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            window as Window & {
+              overlayCalls?: { name: string; args: unknown }[];
+            }
+          ).overlayCalls?.find((c) => c.name === "select_region")?.args,
+      ),
+    )
+    .toEqual({
+      rect: { x: 201, y: 240, width: 400, height: 280 },
+    });
 });
 
 test("贴图悬停显示工具栏；直接编辑、保存、另存和关闭", async ({ page }) => {
@@ -218,6 +289,10 @@ test("贴图悬停显示工具栏；直接编辑、保存、另存和关闭", as
     height: 240,
   });
   await expect(page.getByRole("button")).toHaveCount(0);
+  await page.keyboard.press("+");
+  await expect(page.locator(".pin-hud")).toHaveText("110%");
+  await page.keyboard.press("0");
+  await expect(page.locator(".pin-hud")).toHaveText("100%");
   await image.hover();
   const toolbar = page.getByRole("toolbar", { name: "贴图工具栏" });
   await expect(toolbar).toBeVisible();

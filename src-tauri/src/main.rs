@@ -122,6 +122,31 @@ fn open_screen_recording_settings() -> Result<(), String> {
         Err("请手动打开「系统设置 → 隐私与安全性 → 屏幕与系统录音」".into())
     }
 }
+#[cfg(target_os = "macos")]
+fn open_accessibility_settings_impl() -> Result<(), String> {
+    use objc2_app_kit::NSWorkspace;
+    use objc2_foundation::{ns_string, NSURL};
+    let url = NSURL::URLWithString(ns_string!(
+        "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+    ))
+    .ok_or("无法打开辅助功能设置")?;
+    if NSWorkspace::sharedWorkspace().openURL(&url) {
+        Ok(())
+    } else {
+        Err("请手动打开「系统设置 → 隐私与安全性 → 辅助功能」".into())
+    }
+}
+#[tauri::command]
+fn open_accessibility_settings(window: tauri::WebviewWindow) -> Result<(), String> {
+    if !["main", "clipboard"].contains(&window.label()) {
+        return Err("无效窗口".into());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        open_accessibility_settings_impl()?;
+    }
+    Ok(())
+}
 #[tauri::command]
 fn screen_permission_status(window: tauri::WebviewWindow) -> Result<bool, String> {
     require_main(&window)?;
@@ -233,11 +258,15 @@ async fn pin_entry(
     if e.kind != "image" {
         return Err("仅截图可以贴图".into());
     }
-    tauri::async_runtime::spawn_blocking(move || pin_internal(&app, &e))
+    tauri::async_runtime::spawn_blocking(move || pin_internal(&app, &e, None))
         .await
         .map_err(err)?
 }
-fn pin_internal(app: &tauri::AppHandle, e: &Entry) -> Result<(), String> {
+fn pin_internal(
+    app: &tauri::AppHandle,
+    e: &Entry,
+    position: Option<(f64, f64)>,
+) -> Result<(), String> {
     let label = format!("pin-{}", e.id);
     if let Some(w) = app.get_webview_window(&label) {
         let _ = w.set_focus();
@@ -262,7 +291,19 @@ fn pin_internal(app: &tauri::AppHandle, e: &Entry) -> Result<(), String> {
     .map_err(err)?;
     let size = tauri::PhysicalSize::new(e.width, e.height);
     pin.set_size(size).map_err(err)?;
-    pin.center().map_err(err)?;
+    if let Some((px, py)) = position {
+        #[cfg(target_os = "macos")]
+        pin.set_position(tauri::LogicalPosition::new(px, py))
+            .map_err(err)?;
+        #[cfg(not(target_os = "macos"))]
+        pin.set_position(tauri::PhysicalPosition::new(
+            px.round() as i32,
+            py.round() as i32,
+        ))
+        .map_err(err)?;
+    } else {
+        pin.center().map_err(err)?;
+    }
     let window = pin.clone();
     pin.on_window_event(move |event| {
         if matches!(event, tauri::WindowEvent::ScaleFactorChanged { .. }) {
@@ -273,8 +314,6 @@ fn pin_internal(app: &tauri::AppHandle, e: &Entry) -> Result<(), String> {
             });
         }
     });
-    pin.show().map_err(err)?;
-    pin.set_focus().map_err(err)?;
     Ok(())
 }
 #[tauri::command]
@@ -335,6 +374,7 @@ async fn save_pin_edit(
     let (original, _) = pin_source(&window, &app.state::<State>(), &id)?;
     tauri::async_runtime::spawn_blocking(move || {
         let bytes = pin_edit_png(&data, &original)?;
+        let _ = clipboard::copy_png(&app, &bytes);
         let entry = new_entry("image", "png", original.width, original.height);
         fs::write(app.state::<State>().library.join(&entry.name), bytes).map_err(err)?;
         save_entry(&app, entry)?;
@@ -342,6 +382,56 @@ async fn save_pin_edit(
     })
     .await
     .map_err(err)?
+}
+#[tauri::command]
+async fn copy_pin_image(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    id: String,
+    data: Option<String>,
+) -> Result<(), String> {
+    let (entry, source) = pin_source(&window, &app.state::<State>(), &id)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let bytes = match data {
+            Some(data) => pin_edit_png(&data, &entry)?,
+            None => fs::read(source).map_err(err)?,
+        };
+        clipboard::copy_png(&app, &bytes)
+    })
+    .await
+    .map_err(err)?
+}
+#[tauri::command]
+fn resize_pin(
+    window: tauri::WebviewWindow,
+    state: tauri::State<State>,
+    id: String,
+    scale: f64,
+) -> Result<(), String> {
+    let (entry, _) = pin_source(&window, &state, &id)?;
+    if !scale.is_finite() || !(0.2..=4.0).contains(&scale) {
+        return Err("缩放比例超出范围".into());
+    }
+    let width = ((entry.width as f64) * scale).round().clamp(48.0, 7680.0) as u32;
+    let height = ((entry.height as f64) * scale).round().clamp(48.0, 4320.0) as u32;
+    window
+        .set_size(tauri::PhysicalSize::new(width, height))
+        .map_err(err)
+}
+#[tauri::command]
+fn copy_overlay_color(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    text: String,
+) -> Result<(), String> {
+    if window.label() != "overlay" {
+        return Err("无效窗口".into());
+    }
+    let trimmed = text.trim();
+    if trimmed.is_empty() || trimmed.len() > 64 {
+        return Err("无效颜色值".into());
+    }
+    clipboard::copy_text(&app, trimmed)
 }
 #[tauri::command]
 async fn save_pin_as(
@@ -492,6 +582,7 @@ fn main() {
             clipboard::edit_clipboard,
             request_screen_permission,
             screen_permission_status,
+            open_accessibility_settings,
             save_image,
             save_settings,
             import_image,
@@ -500,6 +591,9 @@ fn main() {
             pin_data,
             save_pin_edit,
             save_pin_as,
+            copy_pin_image,
+            resize_pin,
+            copy_overlay_color,
             capture::monitors,
             capture::begin_capture,
             capture::overlay_data,

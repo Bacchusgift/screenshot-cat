@@ -17,7 +17,7 @@ esac
  --disable-network --disable-ffplay --disable-ffprobe --disable-shared --enable-static \
  --enable-ffmpeg --enable-avdevice --enable-swscale --enable-avfilter \
  --enable-protocol=file,pipe --enable-indev=avfoundation,gdigrab,x11grab \
- --enable-demuxer=mov --enable-muxer=mp4,gif \
+ --enable-demuxer=mov,rawvideo --enable-muxer=mp4,gif \
  --enable-decoder=h264,mpeg4,rawvideo --enable-parser=h264,mpeg4video \
  --enable-encoder=mpeg4,gif,h264_videotoolbox,h264_mf \
  --enable-filter=crop,pad,fps,scale,split,palettegen,paletteuse,format,null \

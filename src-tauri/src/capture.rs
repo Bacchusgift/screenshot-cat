@@ -1,5 +1,6 @@
 use super::*;
-use base64::Engine;
+use image::ImageEncoder;
+use std::sync::Arc;
 #[cfg(not(target_os = "macos"))]
 use tauri::PhysicalPosition;
 use tauri::PhysicalSize;
@@ -31,12 +32,106 @@ pub struct Selection {
     pub monitor_id: u32,
     pub monitor_index: usize,
     pub image: String,
+    #[serde(skip)]
+    pub raw_image: Option<Arc<image::RgbaImage>>,
     pub width: u32,
     pub height: u32,
     pub scale: f64,
     pub origin_x: i32,
     pub origin_y: i32,
     pub rect: Option<Rect>,
+    pub windows: Vec<WindowBox>,
+}
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WindowBox {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+fn fast_png(image: &image::RgbaImage) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    let encoder = image::codecs::png::PngEncoder::new_with_quality(
+        &mut out,
+        image::codecs::png::CompressionType::Fast,
+        image::codecs::png::FilterType::Sub,
+    );
+    encoder
+        .write_image(
+            image.as_raw(),
+            image.width(),
+            image.height(),
+            image::ExtendedColorType::Rgba8,
+        )
+        .map_err(err)?;
+    Ok(out)
+}
+fn detect_window_boxes(
+    monitor_origin_x: i32,
+    monitor_origin_y: i32,
+    monitor_width: u32,
+    monitor_height: u32,
+    scale: f64,
+) -> Vec<WindowBox> {
+    let mut boxes = Vec::new();
+    let Ok(list) = xcap::Window::all() else {
+        return boxes;
+    };
+    let current_pid = std::process::id();
+    for window in list {
+        if window.is_minimized().unwrap_or(true) {
+            continue;
+        }
+        if window.pid().ok() == Some(current_pid) {
+            continue;
+        }
+        let (Ok(wx), Ok(wy), Ok(ww), Ok(wh)) =
+            (window.x(), window.y(), window.width(), window.height())
+        else {
+            continue;
+        };
+        if ww < 32 || wh < 32 {
+            continue;
+        }
+        #[cfg(target_os = "macos")]
+        let (px, py, pw, ph) = (
+            ((wx - monitor_origin_x) as f64 * scale).round() as i64,
+            ((wy - monitor_origin_y) as f64 * scale).round() as i64,
+            (ww as f64 * scale).round() as i64,
+            (wh as f64 * scale).round() as i64,
+        );
+        #[cfg(not(target_os = "macos"))]
+        let (px, py, pw, ph) = {
+            let _ = scale;
+            (
+                (wx - monitor_origin_x) as i64,
+                (wy - monitor_origin_y) as i64,
+                ww as i64,
+                wh as i64,
+            )
+        };
+        let x1 = px.max(0).min(monitor_width as i64);
+        let y1 = py.max(0).min(monitor_height as i64);
+        let x2 = (px + pw).max(0).min(monitor_width as i64);
+        let y2 = (py + ph).max(0).min(monitor_height as i64);
+        if x2 - x1 < 32 || y2 - y1 < 32 {
+            continue;
+        }
+        let candidate = WindowBox {
+            x: x1 as u32,
+            y: y1 as u32,
+            width: (x2 - x1) as u32,
+            height: (y2 - y1) as u32,
+        };
+        if !boxes.contains(&candidate) {
+            boxes.push(candidate);
+        }
+        if boxes.len() >= 40 {
+            break;
+        }
+    }
+    boxes
 }
 #[tauri::command]
 pub fn monitors(window: tauri::WebviewWindow) -> Result<Vec<serde_json::Value>, String> {
@@ -76,10 +171,16 @@ pub async fn begin_internal(
     }
     let a = app.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
+        let mut hid_main = false;
         if let Some(w) = main_window(&a) {
-            w.hide().map_err(err)?;
+            if w.is_visible().unwrap_or(false) {
+                w.hide().map_err(err)?;
+                hid_main = true;
+            }
         }
-        std::thread::sleep(std::time::Duration::from_millis(220));
+        if hid_main {
+            std::thread::sleep(std::time::Duration::from_millis(120));
+        }
         let list = xcap::Monitor::all().map_err(err)?;
         let pointer_monitor = if monitor_id.is_none() {
             #[cfg(target_os = "macos")]
@@ -91,9 +192,7 @@ pub async fn begin_internal(
             .map(|e| e.location())
             .map(|p| (p.x as i32, p.y as i32));
             #[cfg(not(target_os = "macos"))]
-            let point = main_window(&a)
-                .and_then(|w| w.cursor_position().ok())
-                .map(|p| (p.x as i32, p.y as i32));
+            let point = a.cursor_position().ok().map(|p| (p.x as i32, p.y as i32));
             point
                 .and_then(|(x, y)| xcap::Monitor::from_point(x, y).ok())
                 .and_then(|m| m.id().ok())
@@ -110,27 +209,36 @@ pub async fn begin_internal(
                     .unwrap_or_else(|| m.is_primary().unwrap_or(false))
             })
             .ok_or("没有可用显示器")?;
-        let image = monitor
-            .capture_image()
-            .map_err(|e| format!("无法读取屏幕，请允许屏幕录制权限后重新启动应用：{e}"))?;
-        let mut bytes = std::io::Cursor::new(Vec::new());
-        image
-            .write_to(&mut bytes, image::ImageFormat::Png)
-            .map_err(err)?;
+        let scale = monitor.scale_factor().map_err(err)? as f64;
+        let origin_x = monitor.x().map_err(err)?;
+        let origin_y = monitor.y().map_err(err)?;
+        let logical_w = monitor.width().map_err(err)?;
+        let logical_h = monitor.height().map_err(err)?;
+        #[cfg(target_os = "macos")]
+        let (width, height) = (
+            ((logical_w as f64) * scale).round() as u32,
+            ((logical_h as f64) * scale).round() as u32,
+        );
+        #[cfg(not(target_os = "macos"))]
+        let (width, height) = (logical_w, logical_h);
+        let windows = if mode == "image" {
+            detect_window_boxes(origin_x, origin_y, width, height, scale)
+        } else {
+            Vec::new()
+        };
         let selection = Selection {
             mode,
             monitor_id: monitor.id().map_err(err)?,
             monitor_index: index,
-            image: format!(
-                "data:image/png;base64,{}",
-                base64::engine::general_purpose::STANDARD.encode(bytes.into_inner())
-            ),
-            width: image.width(),
-            height: image.height(),
-            scale: monitor.scale_factor().map_err(err)? as f64,
-            origin_x: monitor.x().map_err(err)?,
-            origin_y: monitor.y().map_err(err)?,
+            image: String::new(),
+            raw_image: None,
+            width,
+            height,
+            scale,
+            origin_x,
+            origin_y,
             rect: None,
+            windows,
         };
         *a.state::<State>().selection.lock().map_err(err)? = Some(selection.clone());
         let overlay = tauri::WebviewWindowBuilder::new(
@@ -165,8 +273,6 @@ pub async fn begin_internal(
         overlay
             .set_size(PhysicalSize::new(selection.width, selection.height))
             .map_err(err)?;
-        overlay.show().map_err(err)?;
-        overlay.set_focus().map_err(err)?;
         Ok::<_, String>(())
     })
     .await
@@ -214,8 +320,10 @@ pub async fn select_region(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
     rect: Rect,
+    pin: Option<bool>,
 ) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || finish_region(window, app, rect))
+    let pin = pin.unwrap_or(true);
+    tauri::async_runtime::spawn_blocking(move || finish_region(window, app, rect, pin))
         .await
         .map_err(err)?
 }
@@ -223,6 +331,7 @@ fn finish_region(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
     rect: Rect,
+    pin: bool,
 ) -> Result<(), String> {
     if window.label() != "overlay" {
         return Err("无效窗口".into());
@@ -232,30 +341,57 @@ fn finish_region(
     let s = selection.as_mut().ok_or("选区已关闭")?;
     let rect = rect.checked(s.width, s.height)?;
     if s.mode == "image" {
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(s.image.split(',').nth(1).ok_or("图片无效")?)
-            .map_err(err)?;
-        let image = image::load_from_memory(&bytes).map_err(err)?.crop_imm(
-            rect.x,
-            rect.y,
-            rect.width,
-            rect.height,
-        );
-        let mut out = std::io::Cursor::new(Vec::new());
-        image
-            .write_to(&mut out, image::ImageFormat::Png)
-            .map_err(err)?;
+        let monitor_id = s.monitor_id;
+        let monitor_index = s.monitor_index;
+        let origin_x = s.origin_x;
+        let origin_y = s.origin_y;
+        let scale = s.scale;
         drop(selection);
-        let entry = new_entry("image", "png", rect.width, rect.height);
-        fs::write(
-            app.state::<State>().library.join(&entry.name),
-            out.get_ref(),
+        // Hide overlay first so the real-time capture never includes our own selection frame.
+        let _ = window.hide();
+        std::thread::sleep(std::time::Duration::from_millis(24));
+        let list = xcap::Monitor::all().map_err(err)?;
+        let monitor = list
+            .iter()
+            .find(|m| m.id().ok() == Some(monitor_id))
+            .or_else(|| list.get(monitor_index))
+            .ok_or("显示器已断开")?;
+        let full = monitor
+            .capture_image()
+            .map_err(|e| format!("无法读取屏幕，请允许屏幕录制权限后重新启动应用：{e}"))?;
+        let crop_rect = rect.checked(full.width(), full.height())?;
+        let cropped = image::imageops::crop_imm(
+            &full,
+            crop_rect.x,
+            crop_rect.y,
+            crop_rect.width,
+            crop_rect.height,
         )
-        .map_err(err)?;
+        .to_image();
+        let png_bytes = fast_png(&cropped)?;
+        let entry = new_entry("image", "png", crop_rect.width, crop_rect.height);
+        fs::write(app.state::<State>().library.join(&entry.name), &png_bytes).map_err(err)?;
         let entry = save_entry(&app, entry)?;
         restore(&app);
-        let copied = clipboard::copy_png(&app, out.get_ref());
-        let pinned = pin_internal(&app, &entry);
+        let copied = clipboard::copy_rgba(&app, cropped);
+        let pinned = if pin {
+            #[cfg(target_os = "macos")]
+            let pos = Some((
+                origin_x as f64 + crop_rect.x as f64 / scale,
+                origin_y as f64 + crop_rect.y as f64 / scale,
+            ));
+            #[cfg(not(target_os = "macos"))]
+            let pos = {
+                let _ = scale;
+                Some((
+                    origin_x as f64 + crop_rect.x as f64,
+                    origin_y as f64 + crop_rect.y as f64,
+                ))
+            };
+            pin_internal(&app, &entry, pos)
+        } else {
+            Ok(())
+        };
         let failures: Vec<_> = [("复制到剪贴板", copied), ("贴在桌面", pinned)]
             .into_iter()
             .filter_map(|(action, result)| result.err().map(|e| format!("{action}失败：{e}")))
@@ -269,6 +405,8 @@ fn finish_region(
     } else {
         s.rect = Some(rect.clone());
         s.image.clear();
+        s.raw_image = None;
+        s.windows.clear();
         let mode = s.mode.clone();
         let scale = s.scale;
         let x = s.origin_x;
