@@ -59,15 +59,6 @@ export async function overlay() {
     if (screenImage.complete) loadSample();
     else screenImage.addEventListener("load", loadSample, { once: true });
   }
-  if (native) {
-    if (screenImage) await screenImage.decode().catch(() => {});
-    await new Promise((r) => requestAnimationFrame(r));
-    try {
-      const win = getCurrentWindow();
-      await win.show().catch(() => {});
-      await win.setFocus().catch(() => {});
-    } catch {}
-  }
   const point = (e: PointerEvent) => ({
     x: Math.max(0, Math.min(innerWidth, e.clientX)),
     y: Math.max(0, Math.min(innerHeight, e.clientY)),
@@ -493,6 +484,15 @@ export async function overlay() {
       if (config.undo) drawing.undo();
     },
   );
+  if (native) {
+    if (screenImage) await screenImage.decode().catch(() => {});
+    await new Promise((r) => requestAnimationFrame(r));
+    try {
+      const win = getCurrentWindow();
+      await win.show().catch(() => {});
+      await win.setFocus().catch(() => {});
+    } catch {}
+  }
 }
 export async function controls() {
   document.body.className = "controls-body";
