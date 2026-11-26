@@ -448,23 +448,25 @@ fn finish_region(
         .title("录制控制")
         .content_protected(true)
         .decorations(false)
+        .transparent(true)
+        .shadow(false)
         .always_on_top(true)
         .skip_taskbar(true)
         .resizable(false)
-        .inner_size(620.0, 64.0)
+        .inner_size(640.0, 74.0)
         .build()
         .map_err(err)?;
         #[cfg(target_os = "macos")]
         controls
             .set_position(tauri::LogicalPosition::new(
-                x as f64 + ((width as f64 / scale - 620.0) / 2.0).max(0.0),
+                x as f64 + ((width as f64 / scale - 640.0) / 2.0).max(0.0),
                 y as f64 + toolbar_y as f64 / scale,
             ))
             .map_err(err)?;
         #[cfg(not(target_os = "macos"))]
         controls
             .set_position(PhysicalPosition::new(
-                x + ((width as f64 - 620.0 * scale) / 2.0).max(0.0) as i32,
+                x + ((width as f64 - 640.0 * scale) / 2.0).max(0.0) as i32,
                 y + toolbar_y as i32,
             ))
             .map_err(err)?;

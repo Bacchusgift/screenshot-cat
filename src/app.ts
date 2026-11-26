@@ -18,6 +18,9 @@ let state: Init,
 export async function launch() {
   try {
     state = await call<Init>("init");
+    if (state.platform === "macos") {
+      document.documentElement.classList.add("is-macos");
+    }
     await on("library-changed", refresh);
     await on<string>("panel-route", (route) =>
       routeTo(route).catch(handleError),
@@ -66,7 +69,7 @@ async function checkScreenPermission() {
   if (note) note.hidden = state.screenPermission !== false;
 }
 function render() {
-  root.innerHTML = `<div class="optional-panel"><header class="panel-header"><div><h1>截图猫</h1><p>平时只在托盘待命，需要时再来这里。</p></div><nav aria-label="辅助面板"><button data-tab="history" aria-current="${tab === "history" ? "page" : "false"}">截图与视频</button><button data-tab="settings" aria-current="${tab === "settings" ? "page" : "false"}">偏好设置</button></nav></header>${tab === "settings" ? settings() : history()}</div>`;
+  root.innerHTML = `<div class="optional-panel"><header class="panel-header" data-tauri-drag-region><div class="panel-title" data-tauri-drag-region><h1>截图猫</h1><p>平时只在菜单栏待命，需要时再来这里。</p></div><nav aria-label="辅助面板"><button data-tab="history" aria-current="${tab === "history" ? "page" : "false"}">截图与视频</button><button data-tab="settings" aria-current="${tab === "settings" ? "page" : "false"}">偏好设置</button></nav></header><main class="panel-body">${tab === "settings" ? settings() : history()}</main></div>`;
   bind(root, "[data-tab]", (e) =>
     routeTo((e.currentTarget as HTMLElement).dataset.tab!),
   );
@@ -121,7 +124,7 @@ function picker(
 }
 function settings() {
   return `<section class="panel-settings"><div class="permission-note" ${state.screenPermission === false ? "" : "hidden"}><div><strong>当前安装的截图猫未获屏幕录制权限</strong><p>如果系统设置里已开启，请移除旧的截图猫条目，重新添加当前安装的截图猫，再退出并重新打开。</p></div><button class="button" data-permission>打开屏幕录制设置</button></div>
-  <div class="setting-row"><div><label id="fps-label">视频帧率</label><p>更高帧率会占用更多资源</p></div>${picker(
+  <div class="settings-group"><div class="setting-row"><div><label id="fps-label">视频帧率</label><p>更高帧率会占用更多资源</p></div>${picker(
     "fps",
     state.settings.fps,
     [15, 30, 60].map((n) => [n, `${n} FPS`]),
@@ -142,8 +145,8 @@ function settings() {
       ["auto", "自动 · 硬件优先"],
       ["software", "软件 · 兼容优先"],
     ],
-  )}</div>
-  <div class="settings-action"><button class="button primary" data-save-settings>保存设置</button></div><h2>快捷键</h2>${state.shortcuts.map((s) => `<div class="shortcut-row"><span>${escape(s.label)}${s.registered ? "" : " · 被占用"}</span><kbd>${escape(s.key)}</kbd></div>`).join("")}<p class="settings-note">文字和图片剪贴板最多保留 100 条、128 MiB，可在托盘暂停记录。macOS 自动粘贴需要辅助功能权限；未授权时仍可复制后按 ⌘V。</p><p class="settings-note">录制暂不包含声音。关闭此窗口仍在托盘运行。</p></section>`;
+  )}</div></div>
+  <div class="settings-action"><button class="button primary" data-save-settings>保存设置</button></div><h2 class="settings-section-title">快捷键</h2><div class="settings-group">${state.shortcuts.length ? state.shortcuts.map((s) => `<div class="shortcut-row"><span>${escape(s.label)}${s.registered ? "" : " · 被占用"}</span><kbd>${escape(s.key)}</kbd></div>`).join("") : '<div class="shortcut-row"><span>全局快捷键在桌面版中生效</span><kbd>⌘⇧1</kbd></div>'}</div><p class="settings-note">文字和图片剪贴板最多保留 100 条、128 MiB，可在菜单栏暂停记录。macOS 自动粘贴需要辅助功能权限；未授权时仍可复制后按 ⌘V。</p><p class="settings-note">录制暂不包含声音。关闭此窗口仍在菜单栏运行。</p></section>`;
 }
 async function saveSettings() {
   const choice = (key: string) =>

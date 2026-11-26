@@ -17,7 +17,7 @@ pub fn open_panel(app: &tauri::AppHandle, route: &str) {
         {
             return;
         }
-        let result = tauri::WebviewWindowBuilder::new(
+        let builder = tauri::WebviewWindowBuilder::new(
             &app,
             "main",
             tauri::WebviewUrl::App(format!("index.html?panel={route}").into()),
@@ -26,8 +26,12 @@ pub fn open_panel(app: &tauri::AppHandle, route: &str) {
         .inner_size(700.0, 560.0)
         .min_inner_size(420.0, 380.0)
         .skip_taskbar(true)
-        .visible(false)
-        .build();
+        .visible(false);
+        #[cfg(target_os = "macos")]
+        let builder = builder
+            .title_bar_style(tauri::TitleBarStyle::Overlay)
+            .hidden_title(true);
+        let result = builder.build();
         app.state::<State>()
             .panel_opening
             .store(false, Ordering::SeqCst);

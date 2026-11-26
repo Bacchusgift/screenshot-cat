@@ -199,7 +199,7 @@ export async function overlay() {
       loupeCtx.lineTo(121, offset);
       loupeCtx.stroke();
     }
-    loupeCtx.strokeStyle = "#117c66";
+    loupeCtx.strokeStyle = "#007AFF";
     loupeCtx.lineWidth = 2;
     loupeCtx.strokeRect(half * cell + 1, half * cell + 1, cell - 2, cell - 2);
     loupe.hidden = false;
